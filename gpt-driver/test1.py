@@ -5,6 +5,7 @@ import ast
 import numpy as np
 import time
 import argparse
+import re
 from pathlib import Path
 from prompt_message import system_message, generate_user_message, generate_assistant_message
 from tenacity import (
@@ -78,14 +79,31 @@ for token in test_tokens:
 
     text_dict[token] = result
 
-    traj = result.split("\n")[-1]
-    try:
-        traj = ast.literal_eval(traj)
-        traj = np.array(traj)
-    except:
-        print(f"Invalid token: {token}")
+    # Try to extract trajectory list from anywhere in the text
+    m = re.search(r"\[[\s\S]*?\]", result)  # first [...] block
+    if not m:
+        print(f"Invalid token (no traj found): {token}")
         invalid_tokens.append(token)
         continue
+
+    traj_text = m.group(0)
+
+    try:
+        traj = ast.literal_eval(traj_text)  # should become a Python list/tuple
+        # If model included a starting (0,0) and returned 7 points, drop the first one
+        if isinstance(traj, (list, tuple)) and len(traj) == 7:
+            if isinstance(traj[0], (list, tuple)) and len(traj[0]) == 2:
+                if float(traj[0][0]) == 0.0 and float(traj[0][1]) == 0.0:
+                    traj = traj[1:]
+        traj = np.array(traj, dtype=float)
+        # Optional strict check: must be 6 waypoints
+        if traj.shape != (6, 2):
+            raise ValueError(f"Unexpected traj shape: {traj.shape}")
+    except Exception as e:
+        print(f"Invalid token (parse error): {token} | {e}")
+        invalid_tokens.append(token)
+        continue
+
     traj_dict[token] = traj
 
     with open(temp_text_name, "a+") as file:
